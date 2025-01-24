@@ -6,9 +6,7 @@ import type {
 	MergeFragmentsOptions,
 	MergeSignalsOptions,
 } from "./types.ts";
-
 import { DefaultSseRetryDurationMs } from "./consts.ts";
-
 import type { Jsonifiable } from "type-fest";
 
 /**

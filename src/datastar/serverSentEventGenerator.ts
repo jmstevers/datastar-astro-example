@@ -2,12 +2,8 @@ import {
 	type DatastarEventOptions,
 	type EventType,
 	sseHeaders,
-} from "../types.ts";
-
-import { ServerSentEventGenerator as AbstractSSEGenerator } from "../abstractServerSentEventGenerator.ts";
-
-import type { IncomingMessage, ServerResponse } from "node:http";
-import process from "node:process";
+} from "./types.ts";
+import { ServerSentEventGenerator as AbstractSSEGenerator } from "./abstractServerSentEventGenerator.ts";
 import type { Jsonifiable } from "type-fest";
 
 function isRecord(obj: unknown): obj is Record<string, Jsonifiable> {
@@ -20,36 +16,33 @@ function isRecord(obj: unknown): obj is Record<string, Jsonifiable> {
  * Cannot be instantiated directly, you must use the stream static method.
  */
 export class ServerSentEventGenerator extends AbstractSSEGenerator {
-	protected req: IncomingMessage;
-	protected res: ServerResponse;
+	protected controller: ReadableStreamDefaultController;
 
-	protected constructor(req: IncomingMessage, res: ServerResponse) {
+	protected constructor(controller: ReadableStreamDefaultController) {
 		super();
-		this.req = req;
-		this.res = res;
-
-		this.res.writeHead(200, sseHeaders);
-		this.req.on("close", () => {
-			this.res.end();
-		});
+		this.controller = controller;
 	}
 
 	/**
 	 * Initializes the server-sent event generator and executes the streamFunc function.
 	 *
-	 * @param req - The NodeJS request object.
-	 * @param res - The NodeJS response object.
 	 * @param streamFunc - A function that will be passed the initialized ServerSentEventGenerator class as it's first parameter.
+	 * @returns an HTTP Response
 	 */
-	static async stream(
-		req: IncomingMessage,
-		res: ServerResponse,
+	static stream(
 		streamFunc: (stream: ServerSentEventGenerator) => Promise<void> | void,
-	): Promise<void> {
-		const stream = streamFunc(new ServerSentEventGenerator(req, res));
-		if (stream instanceof Promise) await stream;
+	): Response {
+		const stream = new ReadableStream({
+			async start(controller) {
+				const stream = streamFunc(new ServerSentEventGenerator(controller));
+				if (stream instanceof Promise) await stream;
+				controller.close();
+			},
+		});
 
-		res.end();
+		return new Response(stream, {
+			headers: sseHeaders,
+		});
 	}
 
 	protected override send(
@@ -60,7 +53,7 @@ export class ServerSentEventGenerator extends AbstractSSEGenerator {
 		const eventLines = super.send(event, dataLines, options);
 
 		for (const line of eventLines) {
-			this.res.write(line);
+			this.controller?.enqueue(new TextEncoder().encode(line));
 		}
 
 		return eventLines;
@@ -69,65 +62,45 @@ export class ServerSentEventGenerator extends AbstractSSEGenerator {
 	/**
 	 * Reads client sent signals based on HTTP methods
 	 *
-	 * @params request - The NodeJS Request object.
+	 * @params request - The HTTP Request object.
 	 *
 	 * @returns An object containing a success boolean and either the client's signals or an error message.
 	 */
 	static async readSignals(
-		request: IncomingMessage,
+		request: Request,
 	): Promise<
 		| { success: true; signals: Record<string, Jsonifiable> }
 		| { success: false; error: string }
 	> {
-		if (request.method === "GET") {
-			const url = new URL(
-				`http://${process.env.HOST ?? "localhost"}${request.url}`,
-			);
-			const params = url.searchParams;
-
-			try {
+		try {
+			if (request.method === "GET") {
+				const url = new URL(request.url);
+				const params = url.searchParams;
 				if (params.has("datastar")) {
 					// biome-ignore lint/style/noNonNullAssertion: <explanation>
 					const signals = JSON.parse(params.get("datastar")!);
+
 					if (isRecord(signals)) {
 						return { success: true, signals };
 					}
 					throw new Error("Datastar param is not a record");
 				}
 				throw new Error("No datastar object in request");
-			} catch (e: unknown) {
-				if (isRecord(e) && "message" in e && typeof e.message === "string") {
-					return { success: false, error: e.message };
-				}
-				return {
-					success: false,
-					error: "unknown error when parsing request",
-				};
 			}
-		}
-		const body = await new Promise((resolve, _) => {
-			let chunks = "";
-			request.on("data", (chunk) => {
-				chunks += chunk;
-			});
-			request.on("end", () => {
-				resolve(chunks);
-			});
-		});
-		let parsedBody = {};
-		try {
-			if (typeof body !== "string") throw Error("body was not a string");
-			parsedBody = JSON.parse(body);
+
+			const signals = await request.json();
+
+			if (isRecord(signals)) {
+				return { success: true, signals: signals };
+			}
+
+			throw new Error("Parsed JSON body is not of type record");
 		} catch (e: unknown) {
 			if (isRecord(e) && "message" in e && typeof e.message === "string") {
 				return { success: false, error: e.message };
 			}
-			return {
-				success: false,
-				error: "unknown error when parsing request",
-			};
-		}
 
-		return { success: true, signals: parsedBody };
+			return { success: false, error: "unknown error when parsing request" };
+		}
 	}
 }

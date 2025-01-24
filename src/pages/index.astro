@@ -1,0 +1,12 @@
+---
+import Layout from "@layouts/layout.astro";
+import Counter from "@components/counter.astro";
+---
+
+<Layout>
+    <Counter />
+    <button
+        data-on-click="@post('/api/counter')"
+        data-on-load="@get('/api/counter')">click me</button
+    >
+</Layout>

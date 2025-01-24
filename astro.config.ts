@@ -3,11 +3,11 @@ import tailwindcss from "@tailwindcss/vite";
 
 import node from "@astrojs/node";
 
+import netlify from "@astrojs/netlify";
+
 export default defineConfig({
-	vite: {
-		plugins: [tailwindcss()],
-	},
-	adapter: node({
-		mode: "standalone",
-	}),
+    vite: {
+        plugins: [tailwindcss()],
+    },
+    adapter: netlify(),
 });
